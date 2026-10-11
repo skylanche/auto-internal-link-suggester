@@ -285,6 +285,14 @@ class ConfigError(Exception):
     """Missing key / model / URL: not worth retrying."""
 
 
+class BadOutput(Exception):
+    """The model answered, but not with usable JSON."""
+
+
+class EmptyResponse(BadOutput):
+    """The model answered with no text at all."""
+
+
 
 SYSTEM = """You are an SEO internal-linking assistant. You get numbered body paragraphs from one
 page and a list of candidate target pages from the same site. Return ONLY valid JSON.
@@ -334,25 +342,48 @@ def _openai_client(provider, model, api_key, base_url, timeout):
     return OpenAI(base_url=base_url, api_key=key or "none", timeout=timeout, max_retries=0), model, base_url
 
 
-def call_llm(provider, model, user_prompt, api_key=None, base_url=None, system=None, max_tokens=2500, timeout=None):
+def call_llm(provider, model, user_prompt, api_key=None, base_url=None, system=None, max_tokens=None, timeout=None):
     """provider: 'anthropic' (native API) or any OpenAI-compatible service (preset or 'custom').
     api_key / base_url / model fall back to presets and environment variables when not given.
     Timeout (seconds) defaults to LLM_TIMEOUT or 60."""
     timeout = timeout or float(os.environ.get("LLM_TIMEOUT", 60))
     system = system or SYSTEM
+    max_tokens = max_tokens or int(os.environ.get("LLM_MAX_TOKENS", 4000))
     if provider == "anthropic":
         import anthropic
         c = anthropic.Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("LLM_API_KEY"),
                                 timeout=timeout, max_retries=0)
         r = c.messages.create(model=model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5"), max_tokens=max_tokens,
                               system=system, messages=[{"role": "user", "content": user_prompt}])
-        return r.content[0].text
+        text = "".join(getattr(b, "text", "") or "" for b in (r.content or []))
+        if not text.strip():
+            raise EmptyResponse("Model ran out of output tokens before answering (finish_reason=length). This is typical of reasoning/'thinking' models: Try a non-reasoning instruct model, or raise LLM_MAX_TOKENS in .env." if getattr(r, "stop_reason", None) == "max_tokens" else f"Model returned an empty response (stop_reason={getattr(r, 'stop_reason', None)}).")
+        return text
     c, model, base_url = _openai_client(provider, model, api_key, base_url, timeout)
     kw = {"response_format": {"type": "json_object"}} if "api.openai.com" in base_url and system is SYSTEM else {}
-    r = c.chat.completions.create(
-        model=model, temperature=0.2, max_tokens=max_tokens, **kw,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user_prompt}])
-    return r.choices[0].message.content
+    for attempt in (0, 1):
+        r = c.chat.completions.create(
+            model=model, temperature=0.2, max_tokens=max_tokens, **kw,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user_prompt}])
+        if not getattr(r, "choices", None):
+            raise EmptyResponse("Provider returned no choices (possibly an error or overload). Try another model.")
+        ch = r.choices[0]
+        text = ch.message.content
+        if not text:  # some reasoning models put the answer in a separate field
+            for attr in ("reasoning_content", "reasoning"):
+                alt = getattr(ch.message, attr, None)
+                if alt and "{" in alt:
+                    text = alt
+                    break
+        if text and text.strip():
+            return text
+        if getattr(ch, "finish_reason", None) == "length" and attempt == 0 and max_tokens < 8000:
+            max_tokens = min(max_tokens * 2, 8000)  # reasoning models can burn the budget thinking: try once with more
+            continue
+        break
+    if getattr(ch, "finish_reason", None) == "length":
+        raise EmptyResponse("Model ran out of output tokens before answering (finish_reason=length). This is typical of reasoning/'thinking' models: Try a non-reasoning instruct model, or raise LLM_MAX_TOKENS in .env.")
+    raise EmptyResponse(f"Model returned an empty response (finish_reason={getattr(ch, 'finish_reason', None)}). Try a different model.")
 
 
 def test_connection(provider, model=None, api_key=None, base_url=None):
@@ -360,8 +391,14 @@ def test_connection(provider, model=None, api_key=None, base_url=None):
     t0 = time.time()
     try:
         out = call_llm(provider, model, "Reply with the single word: OK", api_key, base_url,
-                       system="You are a connectivity test.", max_tokens=10, timeout=30)
+                       system="You are a connectivity test.", max_tokens=300, timeout=45)
         return True, f"Connected. Model replied in {time.time() - t0:.1f}s ({(out or '').strip()[:20]!r})."
+    except EmptyResponse as e:
+        if "finish_reason=length" in str(e) or "max_tokens" in str(e):
+            return True, ("Connected, but this model spent its whole token budget 'thinking' (a reasoning model). "
+                          "It will be slow and may fail; a non-reasoning instruct model is recommended. "
+                          f"({time.time() - t0:.1f}s)")
+        return False, _explain(e)
     except Exception as e:
         msg = _explain(e)
         if provider != "anthropic" and getattr(e, "status_code", None) == 404:
@@ -378,8 +415,26 @@ def test_connection(provider, model=None, api_key=None, base_url=None):
 
 
 def parse_json(text):
+    """Pull the JSON out of whatever the model returned (fences, <think> blocks, prose, bare lists)."""
+    if not isinstance(text, str) or not text.strip():
+        raise EmptyResponse("Model returned an empty response.")
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
-    return json.loads(text[text.find("{"): text.rfind("}") + 1])
+    text = re.sub(r"```(?:json)?", "", text)
+    starts = [i for i in (text.find("{"), text.find("[")) if i != -1]
+    end = max(text.rfind("}"), text.rfind("]"))
+    if not starts or end < min(starts):
+        raise BadOutput(f"Model returned non-JSON output, starting: {text.strip()[:100]!r}")
+    try:
+        data = json.loads(text[min(starts): end + 1])
+    except json.JSONDecodeError:
+        raise BadOutput(f"Model returned incomplete/invalid JSON (maybe cut off), starting: {text.strip()[:100]!r}")
+    if isinstance(data, list):
+        data = {"suggestions": data}
+    if isinstance(data, dict) and "suggestions" not in data and "target_url" in data:
+        data = {"suggestions": [data]}
+    if not isinstance(data, dict):
+        raise BadOutput(f"Unexpected JSON shape: {str(data)[:100]!r}")
+    return data
 
 
 # ---------- validation ----------
@@ -428,8 +483,11 @@ def _explain(e):
         return "Rate limit reached (429). Lower LLM_CONCURRENCY to 1 in .env or wait a minute."
     if code == 400:
         return f"Bad request (400): {msg[:160]}"
-    if isinstance(e, json.JSONDecodeError):
-        return "Model returned unreadable (non-JSON) output. Try a larger model."
+    if isinstance(e, BadOutput):
+        m = str(e)[:260]
+        return m if "Try" in m else m + " Try a larger/different model."
+    if isinstance(e, TypeError):
+        return f"Unexpected reply format from provider ({msg[:100]}). Try a different model."
     if "timed out" in msg.lower() or "timeout" in e.__class__.__name__.lower():
         return "Request timed out."
     return msg[:200]
