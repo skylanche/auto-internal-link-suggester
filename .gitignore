@@ -1,0 +1,7 @@
+.env*
+.linkcache.json
+suggestions.json
+__pycache__/
+.venv/
+.sitemap_cache.json
+data/*
