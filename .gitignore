@@ -1,4 +1,4 @@
-.env
+.env*
 .linkcache.json
 suggestions.json
 __pycache__/
