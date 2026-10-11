@@ -1,4 +1,4 @@
-# auto-link-suggest
+# auto-internal-link-suggester
 
 Suggests internal links for a page. Give it a page URL and your sitemap URL; an AI model
 (Claude, OpenAI, NVIDIA, or any OpenAI-compatible API) picks relevant sitemap pages and proposes up to 2 anchor texts per
@@ -11,7 +11,7 @@ Each suggestion is either:
 ## Project layout
 
 ```
-auto-link-suggest/
+auto-internal-link-suggester/
 ├── app.py              # web front end (Flask): start/stop, results table, CSV/XLSX/Word download
 ├── internal_links.py   # core logic + command-line tool
 ├── docx_export.py      # builds the Word copy of the page with links placed
