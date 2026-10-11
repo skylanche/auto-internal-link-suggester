@@ -28,6 +28,7 @@ py -m venv .venv
 source .venv/bin/activate # Windows: source .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env # then edit .env and add your key(s). Remember that .env.example is just an example file copy it as .env in project root folder to add Secret Keys
+```
 
 Add to .gitignore file to avoid db or other files being pushed to github 
 .env*
@@ -38,14 +39,12 @@ __pycache__/
 .sitemap_cache.json
 data/*
 
-```
-
 ## Run the web app
 
 ```bash
 python app.py
 ```
-Open http://127.0.0.1:5000, enter the Page URL and Sitemap URL, choose a provider use a **large model** or rate limits cut off requests, press **Start**.
+Open http://127.0.0.1:5000, enter the Page URL and Sitemap URL, choose a provider use a **large model** or rate limits cut off requests, Test Connection and press **Start**. If there is error change model and base URL
 **Stop** takes effect when the current step finishes. When results appear, download them as CSV, XLSX, or **Word** (the full page content with the links placed in).
 
 ## If you want to Run it from the command line
