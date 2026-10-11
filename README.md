@@ -31,6 +31,7 @@ cp .env.example .env # then edit .env and add your key(s). Remember that .env.ex
 ```
 
 Add to .gitignore file to avoid db or other files being pushed to github 
+```
 .env*
 .linkcache.json
 suggestions.json
@@ -38,6 +39,7 @@ __pycache__/
 .venv/
 .sitemap_cache.json
 data/*
+```
 
 ## Run the web app
 
