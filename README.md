@@ -46,7 +46,7 @@ data/*
 ```bash
 python app.py
 ```
-Open http://127.0.0.1:5000, enter the Page URL and Sitemap URL, choose a provider use a **large model** or rate limits cut off requests, Test Connection and press **Start**. If there is error change model and base URL
+Open http://127.0.0.1:5000, enter the Page URL and Sitemap URL, choose a provider use a **large model** like gemini-3.5-flash-lite or rate limits cut off requests, Test Connection and press **Start**. If there is error change model and base URL
 **Stop** takes effect when the current step finishes. When results appear, download them as CSV, XLSX, or **Word** (the full page content with the links placed in).
 
 ## If you want to Run it from the command line
